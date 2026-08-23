@@ -110,6 +110,63 @@ def test_authenticate_uses_client_secret_json(monkeypatch):
     ])
 
 
+def test_remote_auth_creates_state_bound_url(monkeypatch):
+    monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
+    yt_auth = YouTubeAuth()
+    flow = MagicMock()
+    flow.authorization_url.return_value = ("https://accounts.google.test/auth", "state")
+
+    with patch.object(yt_auth, "_make_flow", return_value=flow):
+        url = yt_auth.begin_remote_auth("https://service.test/auth/callback")
+
+    assert url == "https://accounts.google.test/auth"
+    assert yt_auth._remote_auth_state is not None
+    assert yt_auth._remote_auth_state[0] == "state"
+    flow.authorization_url.assert_called_once_with(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    assert flow.redirect_uri == "https://service.test/auth/callback"
+
+
+def test_remote_auth_exchanges_code_and_saves_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
+    yt_auth = YouTubeAuth(config_dir=tmp_path)
+    start_flow = MagicMock()
+    start_flow.authorization_url.return_value = ("https://accounts.google.test/auth", "state")
+    complete_flow = MagicMock()
+    complete_flow.credentials.to_json.return_value = "{}"
+
+    with patch.object(yt_auth, "_make_flow", side_effect=[start_flow, complete_flow]):
+        yt_auth.begin_remote_auth("https://service.test/auth/callback")
+        yt_auth.complete_remote_auth(
+            "authorization-code", "state", "https://service.test/auth/callback"
+        )
+
+    complete_flow.fetch_token.assert_called_once_with(code="authorization-code")
+    assert yt_auth.token_path.exists()
+    assert yt_auth._credentials is complete_flow.credentials
+    assert yt_auth._remote_auth_state is None
+
+
+def test_remote_auth_rejects_invalid_state(monkeypatch):
+    monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
+    yt_auth = YouTubeAuth()
+    flow = MagicMock()
+    flow.authorization_url.return_value = ("https://accounts.google.test/auth", "state")
+
+    with patch.object(yt_auth, "_make_flow", return_value=flow):
+        yt_auth.begin_remote_auth("https://service.test/auth/callback")
+        with pytest.raises(AuthError, match="Invalid or expired OAuth state"):
+            yt_auth.complete_remote_auth(
+                "authorization-code", "wrong-state", "https://service.test/auth/callback"
+            )
+
+    flow.fetch_token.assert_not_called()
+    assert yt_auth._remote_auth_state is None
+
+
 def test_status_no_token(tmp_path):
     yt_auth = YouTubeAuth(config_dir=tmp_path)
     status = yt_auth.status()

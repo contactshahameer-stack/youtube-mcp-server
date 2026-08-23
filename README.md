@@ -152,6 +152,22 @@ browser flow, and the resulting `token.json` must already be available to the
 service. Use durable, private storage for `YOUTUBE_MCP_CONFIG_DIR` (such as a
 Render persistent disk) and do not commit Google credentials or tokens.
 
+### Temporary Railway OAuth
+
+Railway cannot open the local browser used by `run_local_server()`. To authorize
+the single configured account temporarily, set these Railway variables:
+
+- `YOUTUBE_MCP_REMOTE_AUTH_ENABLED=true`
+- `YOUTUBE_MCP_REMOTE_AUTH_KEY` to a private temporary key
+- `YOUTUBE_MCP_REMOTE_REDIRECT_URI=https://your-service.up.railway.app/auth/callback`
+
+Register that exact callback URL in the Google OAuth client, deploy, then open
+`https://your-service.up.railway.app/auth` and submit the key. The flow stores
+the refresh token at `YOUTUBE_MCP_TOKEN_PATH`. Disable
+`YOUTUBE_MCP_REMOTE_AUTH_ENABLED` and remove the temporary key after the token
+is saved. Keep the token path on a private Railway volume so it survives
+restarts.
+
 Set `MCP_TRANSPORT=stdio` only when running the legacy local stdio mode. The
 default is `streamable-http`.
 

@@ -6,6 +6,8 @@ On first use, a browser-based OAuth consent flow runs and stores the token local
 
 import json
 import os
+import secrets
+import time
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -51,6 +53,7 @@ class YouTubeAuth:
         )
         self._credentials: Credentials | None = None
         self.client_secret_json: str | None = None
+        self._remote_auth_state: tuple[str, float] | None = None
 
         # Resolve client_secret.json path
         if client_secret_path:
@@ -69,6 +72,61 @@ class YouTubeAuth:
 
         # API key fallback for public-only operations
         self.api_key = api_key or os.environ.get("YOUTUBE_API_KEY")
+
+    @property
+    def remote_auth_enabled(self) -> bool:
+        """Whether the temporary remote authorization flow is enabled."""
+        return os.environ.get("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "").lower() == "true"
+
+    def _make_flow(self) -> InstalledAppFlow:
+        """Create the OAuth flow using the configured client credentials."""
+        if self.client_secret_json:
+            try:
+                client_config = json.loads(self.client_secret_json)
+            except json.JSONDecodeError as e:
+                raise AuthError(
+                    "YOUTUBE_MCP_CLIENT_SECRET_JSON must contain valid JSON."
+                ) from e
+            return InstalledAppFlow.from_client_config(client_config, SCOPES)
+        if not self.client_secret_path.exists():
+            raise AuthError(
+                f"client_secret.json not found at {self.client_secret_path}. "
+                f"Download it from your Google Cloud Console "
+                f"(APIs & Services > Credentials > OAuth 2.0 Client IDs) "
+                f"and place it at this path, or set YOUTUBE_MCP_CLIENT_SECRET env var."
+            )
+        return InstalledAppFlow.from_client_secrets_file(
+            str(self.client_secret_path), SCOPES
+        )
+
+    def begin_remote_auth(self, redirect_uri: str) -> str:
+        """Create a one-time authorization URL for a browser-based flow."""
+        if not self.remote_auth_enabled:
+            raise AuthError("Remote authorization is disabled.")
+        flow = self._make_flow()
+        flow.redirect_uri = redirect_uri
+        authorization_url, state = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent",
+        )
+        self._remote_auth_state = (state, time.monotonic() + 600)
+        return authorization_url
+
+    def complete_remote_auth(self, code: str, state: str, redirect_uri: str) -> None:
+        """Exchange a validated callback for credentials and persist the token."""
+        pending = self._remote_auth_state
+        self._remote_auth_state = None
+        if not pending or not secrets.compare_digest(pending[0], state):
+            raise AuthError("Invalid or expired OAuth state.")
+        if time.monotonic() >= pending[1]:
+            raise AuthError("Invalid or expired OAuth state.")
+
+        flow = self._make_flow()
+        flow.redirect_uri = redirect_uri
+        flow.fetch_token(code=code)
+        self._save_token(flow.credentials)
+        self._credentials = flow.credentials
 
     def _load_token(self) -> Credentials | None:
         """Load saved credentials from token file."""
@@ -108,28 +166,8 @@ class YouTubeAuth:
                 pass
 
         # Need to run the OAuth flow
-        if self.client_secret_json:
-            try:
-                client_config = json.loads(self.client_secret_json)
-            except json.JSONDecodeError as e:
-                raise AuthError(
-                    "YOUTUBE_MCP_CLIENT_SECRET_JSON must contain valid JSON."
-                ) from e
-        elif not self.client_secret_path.exists():
-            raise AuthError(
-                f"client_secret.json not found at {self.client_secret_path}. "
-                f"Download it from your Google Cloud Console "
-                f"(APIs & Services > Credentials > OAuth 2.0 Client IDs) "
-                f"and place it at this path, or set YOUTUBE_MCP_CLIENT_SECRET env var."
-            )
-
         try:
-            if self.client_secret_json:
-                flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(self.client_secret_path), SCOPES
-                )
+            flow = self._make_flow()
             creds = flow.run_local_server(port=0)
             self._save_token(creds)
             self._credentials = creds
