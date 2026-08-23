@@ -3,6 +3,8 @@
 import os
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from youtube_mcp.auth import YouTubeAuth
 from youtube_mcp.utils.quota import QuotaTracker
@@ -10,7 +12,15 @@ from youtube_mcp.utils.quota import QuotaTracker
 mcp = FastMCP(
     "YouTube MCP Server",
     instructions="Comprehensive MCP server for YouTube Data API, Analytics API, and Reporting API",
+    host=os.environ.get("HOST", "0.0.0.0"),
+    port=int(os.environ.get("PORT", "8000")),
+    streamable_http_path="/mcp",
 )
+
+
+@mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
+async def health_check(request: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
 
 # Shared state
 auth = YouTubeAuth(
@@ -50,18 +60,20 @@ def youtube_auth_status() -> dict:
 # --- Register tool modules ---
 # Import tool modules so their @mcp.tool() decorators run
 
-from youtube_mcp.tools import channel  # noqa: E402, F401
-from youtube_mcp.tools import search  # noqa: E402, F401
-from youtube_mcp.tools import transcripts  # noqa: E402, F401
-from youtube_mcp.tools import analytics  # noqa: E402, F401
-from youtube_mcp.tools import publishing  # noqa: E402, F401
-from youtube_mcp.tools import playlists  # noqa: E402, F401
-from youtube_mcp.tools import comments  # noqa: E402, F401
-from youtube_mcp.tools import reporting  # noqa: E402, F401
+from youtube_mcp.tools import (  # noqa: E402
+    analytics,  # noqa: F401
+    channel,  # noqa: F401
+    comments,  # noqa: F401
+    playlists,  # noqa: F401
+    publishing,  # noqa: F401
+    reporting,  # noqa: F401
+    search,  # noqa: F401
+    transcripts,  # noqa: F401
+)
 
 
 def main():
-    mcp.run()
+    mcp.run(transport=os.environ.get("MCP_TRANSPORT", "streamable-http"))
 
 
 if __name__ == "__main__":

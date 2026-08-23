@@ -132,6 +132,29 @@ Add to your MCP settings:
 }
 ```
 
+### Remote MCP on Render
+
+The server defaults to Streamable HTTP and listens on Render's `PORT` at
+`0.0.0.0`. After deployment, configure Claude Connect with the public MCP URL:
+
+```text
+https://your-service.onrender.com/mcp
+```
+
+The `/health` endpoint can be used for the Render health check:
+
+```text
+https://your-service.onrender.com/health
+```
+
+This deployment is single-user only. Google OAuth remains the existing local
+browser flow, and the resulting `token.json` must already be available to the
+service. Use durable, private storage for `YOUTUBE_MCP_CONFIG_DIR` (such as a
+Render persistent disk) and do not commit Google credentials or tokens.
+
+Set `MCP_TRANSPORT=stdio` only when running the legacy local stdio mode. The
+default is `streamable-http`.
+
 ## First Run
 
 On first use, the server will open a browser window for Google OAuth consent. Sign in with the account that owns your YouTube channel and grant the requested permissions. The token is saved to `~/.youtube-mcp/token.json` and auto-refreshes.

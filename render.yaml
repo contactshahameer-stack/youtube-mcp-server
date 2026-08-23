@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: youtube-mcp
+    runtime: python
+    buildCommand: pip install .
+    startCommand: youtube-studio-mcp
+    healthCheckPath: /health
