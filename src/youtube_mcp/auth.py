@@ -53,7 +53,7 @@ class YouTubeAuth:
         )
         self._credentials: Credentials | None = None
         self.client_secret_json: str | None = None
-        self._remote_auth_state: tuple[str, float] | None = None
+        self._remote_auth_state: tuple[str, str | None, float] | None = None
 
         # Resolve client_secret.json path
         if client_secret_path:
@@ -110,7 +110,7 @@ class YouTubeAuth:
             include_granted_scopes="true",
             prompt="consent",
         )
-        self._remote_auth_state = (state, time.monotonic() + 600)
+        self._remote_auth_state = (state, flow.code_verifier, time.monotonic() + 600)
         return authorization_url
 
     def complete_remote_auth(self, code: str, state: str, redirect_uri: str) -> None:
@@ -119,11 +119,12 @@ class YouTubeAuth:
         self._remote_auth_state = None
         if not pending or not secrets.compare_digest(pending[0], state):
             raise AuthError("Invalid or expired OAuth state.")
-        if time.monotonic() >= pending[1]:
+        if time.monotonic() >= pending[2]:
             raise AuthError("Invalid or expired OAuth state.")
 
         flow = self._make_flow()
         flow.redirect_uri = redirect_uri
+        flow.code_verifier = pending[1]
         flow.fetch_token(code=code)
         self._save_token(flow.credentials)
         self._credentials = flow.credentials
@@ -161,7 +162,7 @@ class YouTubeAuth:
                 self._save_token(creds)
                 self._credentials = creds
                 return creds
-            except Exception as e:
+            except Exception:
                 # Refresh failed, need to re-auth
                 pass
 

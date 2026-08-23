@@ -114,6 +114,7 @@ def test_remote_auth_creates_state_bound_url(monkeypatch):
     monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
     yt_auth = YouTubeAuth()
     flow = MagicMock()
+    flow.code_verifier = "start-code-verifier"
     flow.authorization_url.return_value = ("https://accounts.google.test/auth", "state")
 
     with patch.object(yt_auth, "_make_flow", return_value=flow):
@@ -122,6 +123,7 @@ def test_remote_auth_creates_state_bound_url(monkeypatch):
     assert url == "https://accounts.google.test/auth"
     assert yt_auth._remote_auth_state is not None
     assert yt_auth._remote_auth_state[0] == "state"
+    assert yt_auth._remote_auth_state[1] == "start-code-verifier"
     flow.authorization_url.assert_called_once_with(
         access_type="offline",
         include_granted_scopes="true",
@@ -134,6 +136,7 @@ def test_remote_auth_exchanges_code_and_saves_token(tmp_path, monkeypatch):
     monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
     yt_auth = YouTubeAuth(config_dir=tmp_path)
     start_flow = MagicMock()
+    start_flow.code_verifier = "start-code-verifier"
     start_flow.authorization_url.return_value = ("https://accounts.google.test/auth", "state")
     complete_flow = MagicMock()
     complete_flow.credentials.to_json.return_value = "{}"
@@ -145,6 +148,7 @@ def test_remote_auth_exchanges_code_and_saves_token(tmp_path, monkeypatch):
         )
 
     complete_flow.fetch_token.assert_called_once_with(code="authorization-code")
+    assert complete_flow.code_verifier == "start-code-verifier"
     assert yt_auth.token_path.exists()
     assert yt_auth._credentials is complete_flow.credentials
     assert yt_auth._remote_auth_state is None
@@ -154,6 +158,7 @@ def test_remote_auth_rejects_invalid_state(monkeypatch):
     monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
     yt_auth = YouTubeAuth()
     flow = MagicMock()
+    flow.code_verifier = "start-code-verifier"
     flow.authorization_url.return_value = ("https://accounts.google.test/auth", "state")
 
     with patch.object(yt_auth, "_make_flow", return_value=flow):
