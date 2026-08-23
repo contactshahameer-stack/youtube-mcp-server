@@ -39,19 +39,33 @@ class YouTubeAuth:
         config_dir: str | Path | None = None,
         api_key: str | None = None,
     ):
-        self.config_dir = Path(config_dir) if config_dir else DEFAULT_CONFIG_DIR
-        self.token_path = self.config_dir / TOKEN_FILE
+        env_config_dir = os.environ.get("YOUTUBE_MCP_CONFIG_DIR")
+        self.config_dir = (
+            Path(config_dir)
+            if config_dir
+            else Path(env_config_dir) if env_config_dir else DEFAULT_CONFIG_DIR
+        )
+        env_token_path = os.environ.get("YOUTUBE_MCP_TOKEN_PATH")
+        self.token_path = (
+            Path(env_token_path) if env_token_path else self.config_dir / TOKEN_FILE
+        )
         self._credentials: Credentials | None = None
+        self.client_secret_json: str | None = None
 
         # Resolve client_secret.json path
         if client_secret_path:
             self.client_secret_path = Path(client_secret_path)
         else:
-            env_path = os.environ.get("YOUTUBE_MCP_CLIENT_SECRET")
-            if env_path:
-                self.client_secret_path = Path(env_path)
-            else:
+            env_json = os.environ.get("YOUTUBE_MCP_CLIENT_SECRET_JSON")
+            if env_json:
+                self.client_secret_json = env_json
                 self.client_secret_path = self.config_dir / "client_secret.json"
+            else:
+                env_path = os.environ.get("YOUTUBE_MCP_CLIENT_SECRET")
+                if env_path:
+                    self.client_secret_path = Path(env_path)
+                else:
+                    self.client_secret_path = self.config_dir / "client_secret.json"
 
         # API key fallback for public-only operations
         self.api_key = api_key or os.environ.get("YOUTUBE_API_KEY")
@@ -68,7 +82,7 @@ class YouTubeAuth:
 
     def _save_token(self, creds: Credentials):
         """Save credentials to token file."""
-        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.token_path.parent.mkdir(parents=True, exist_ok=True)
         self.token_path.write_text(creds.to_json())
 
     def authenticate(self) -> Credentials:
@@ -94,7 +108,14 @@ class YouTubeAuth:
                 pass
 
         # Need to run the OAuth flow
-        if not self.client_secret_path.exists():
+        if self.client_secret_json:
+            try:
+                client_config = json.loads(self.client_secret_json)
+            except json.JSONDecodeError as e:
+                raise AuthError(
+                    "YOUTUBE_MCP_CLIENT_SECRET_JSON must contain valid JSON."
+                ) from e
+        elif not self.client_secret_path.exists():
             raise AuthError(
                 f"client_secret.json not found at {self.client_secret_path}. "
                 f"Download it from your Google Cloud Console "
@@ -103,9 +124,12 @@ class YouTubeAuth:
             )
 
         try:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(self.client_secret_path), SCOPES
-            )
+            if self.client_secret_json:
+                flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    str(self.client_secret_path), SCOPES
+                )
             creds = flow.run_local_server(port=0)
             self._save_token(creds)
             self._credentials = creds
@@ -160,6 +184,8 @@ class YouTubeAuth:
         return {
             "authenticated": False,
             "token_exists": self.token_path.exists(),
-            "client_secret_exists": self.client_secret_path.exists(),
+            "client_secret_exists": bool(
+                self.client_secret_json or self.client_secret_path.exists()
+            ),
             "client_secret_path": str(self.client_secret_path),
         }
