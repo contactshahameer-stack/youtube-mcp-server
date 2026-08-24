@@ -58,6 +58,9 @@ class YouTubeAuth:
         # process/worker can be completed by another, as long as they share
         # the same config_dir volume. See begin_remote_auth / complete_remote_auth.
         self._pending_auth_path = self.config_dir / PENDING_AUTH_FILE
+        
+        # In-memory store for Railway (single worker)
+        self._pending_store = {}
 
         # Resolve client_secret.json path
         if client_secret_path:
@@ -104,14 +107,14 @@ class YouTubeAuth:
         )
 
     def _write_pending_auth(self, state: str, code_verifier: str | None, expires_at: float) -> None:
-        """Persist the pending OAuth state/PKCE verifier to disk.
-
-        Using a file instead of an in-memory attribute means the callback
-        request can be handled by a different worker process than the one
-        that handled the initial /auth/start request (common on Railway and
-        other multi-worker/multi-process deployments), as long as both
-        processes share the same config_dir.
-        """
+        """Persist the pending OAuth state/PKCE verifier to in-memory store (Railway fix)."""
+        self._pending_store[state] = {
+            "state": state,
+            "code_verifier": code_verifier,
+            "expires_at": expires_at,
+        }
+        
+        # Also write to file for local development (backward compatible)
         self._pending_auth_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "state": state,
@@ -125,8 +128,14 @@ class YouTubeAuth:
             # Best-effort; not fatal if the platform/filesystem doesn't support it.
             pass
 
-    def _read_and_clear_pending_auth(self) -> dict | None:
-        """Load the pending OAuth record, if any, and delete it (single use)."""
+    def _read_and_clear_pending_auth(self, state: str) -> dict | None:
+        """Load the pending OAuth record from in-memory store (Railway fix) and delete it."""
+        # Try in-memory first (Railway)
+        data = self._pending_store.pop(state, None)
+        if data and time.time() < data.get("expires_at", 0):
+            return data
+        
+        # Fallback to file (local development)
         try:
             raw = self._pending_auth_path.read_text()
         except FileNotFoundError:
@@ -134,9 +143,12 @@ class YouTubeAuth:
         finally:
             self._pending_auth_path.unlink(missing_ok=True)
         try:
-            return json.loads(raw)
+            pending = json.loads(raw)
+            if pending.get("state") == state and time.time() < pending.get("expires_at", 0):
+                return pending
         except json.JSONDecodeError:
             return None
+        return None
 
     def begin_remote_auth(self, redirect_uri: str) -> str:
         """Create a one-time authorization URL for a browser-based flow."""
@@ -154,7 +166,7 @@ class YouTubeAuth:
 
     def complete_remote_auth(self, code: str, state: str, redirect_uri: str) -> None:
         """Exchange a validated callback for credentials and persist the token."""
-        pending = self._read_and_clear_pending_auth()
+        pending = self._read_and_clear_pending_auth(state)
         if not pending or not secrets.compare_digest(pending["state"], state):
             raise AuthError("Invalid or expired OAuth state.")
         if time.time() >= pending["expires_at"]:
