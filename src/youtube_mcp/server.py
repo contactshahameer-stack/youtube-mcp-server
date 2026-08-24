@@ -1,5 +1,6 @@
 """YouTube MCP Server — FastMCP entry point."""
 
+import logging
 import os
 import secrets
 from urllib.parse import parse_qs
@@ -10,6 +11,8 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 
 from youtube_mcp.auth import YouTubeAuth
 from youtube_mcp.utils.quota import QuotaTracker
+
+logger = logging.getLogger("youtube_mcp.server")
 
 mcp = FastMCP(
     "YouTube MCP Server",
@@ -75,7 +78,9 @@ async def remote_auth_callback(request: Request) -> PlainTextResponse:
         )
         auth.complete_remote_auth(code, state, callback_url)
     except Exception as e:
-        print(f"REMOTE OAUTH CALLBACK ERROR: {type(e).__name__}: {e}", flush=True)
+        logger.error(
+            "REMOTE OAUTH CALLBACK ERROR: %s: %s", type(e).__name__, e, exc_info=True
+        )
         return PlainTextResponse("Authorization failed. Please start again.", status_code=400)
     return PlainTextResponse("Authorization complete. You can close this window.")
 
