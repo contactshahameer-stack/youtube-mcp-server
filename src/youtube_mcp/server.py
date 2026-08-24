@@ -68,15 +68,15 @@ async def remote_auth_callback(request: Request) -> PlainTextResponse:
     state = request.query_params.get("state")
     if not code or not state:
         return PlainTextResponse("Authorization was not completed.", status_code=400)
-   try:
-    callback_url = os.environ.get(
-        "YOUTUBE_MCP_REMOTE_REDIRECT_URI",
-        str(request.url_for("remote_auth_callback")),
-    )
-    auth.complete_remote_auth(code, state, callback_url)
-except Exception as e:
-    print(f"REMOTE OAUTH CALLBACK ERROR: {type(e).__name__}: {e}", flush=True)
-    return PlainTextResponse("Authorization failed. Please start again.", status_code=400) 
+    try:
+        callback_url = os.environ.get(
+            "YOUTUBE_MCP_REMOTE_REDIRECT_URI",
+            str(request.url_for("remote_auth_callback")),
+        )
+        auth.complete_remote_auth(code, state, callback_url)
+    except Exception as e:
+        print(f"REMOTE OAUTH CALLBACK ERROR: {type(e).__name__}: {e}", flush=True)
+        return PlainTextResponse("Authorization failed. Please start again.", status_code=400)
     return PlainTextResponse("Authorization complete. You can close this window.")
 
 # Shared state
