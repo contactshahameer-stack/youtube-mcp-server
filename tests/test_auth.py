@@ -110,9 +110,9 @@ def test_authenticate_uses_client_secret_json(monkeypatch):
     ])
 
 
-def test_remote_auth_creates_state_bound_url(monkeypatch):
+def test_remote_auth_creates_state_bound_url(tmp_path, monkeypatch):
     monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
-    yt_auth = YouTubeAuth()
+    yt_auth = YouTubeAuth(config_dir=tmp_path)
     flow = MagicMock()
     flow.code_verifier = "start-code-verifier"
     flow.authorization_url.return_value = ("https://accounts.google.test/auth", "state")
@@ -121,15 +121,47 @@ def test_remote_auth_creates_state_bound_url(monkeypatch):
         url = yt_auth.begin_remote_auth("https://service.test/auth/callback")
 
     assert url == "https://accounts.google.test/auth"
-    assert yt_auth._remote_auth_state is not None
-    assert yt_auth._remote_auth_state[0] == "state"
-    assert yt_auth._remote_auth_state[1] == "start-code-verifier"
+    assert yt_auth._pending_auth_path.exists()
+    pending = json.loads(yt_auth._pending_auth_path.read_text())
+    assert pending["state"] == "state"
+    assert pending["code_verifier"] == "start-code-verifier"
     flow.authorization_url.assert_called_once_with(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
     assert flow.redirect_uri == "https://service.test/auth/callback"
+
+
+def test_remote_auth_state_survives_new_instance(tmp_path, monkeypatch):
+    """A pending auth started by one YouTubeAuth instance (e.g. one worker
+    process) must be completable by a different instance pointed at the
+    same config_dir (e.g. a different worker process on Railway)."""
+    monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
+    starter = YouTubeAuth(config_dir=tmp_path)
+    start_flow = MagicMock()
+    start_flow.code_verifier = "start-code-verifier"
+    start_flow.authorization_url.return_value = ("https://accounts.google.test/auth", "state")
+
+    with patch.object(starter, "_make_flow", return_value=start_flow):
+        starter.begin_remote_auth("https://service.test/auth/callback")
+
+    # Simulate the callback landing on a different process/instance that
+    # shares the same config_dir but has no in-memory state from `starter`.
+    completer = YouTubeAuth(config_dir=tmp_path)
+    complete_flow = MagicMock()
+    complete_flow.credentials.to_json.return_value = "{}"
+
+    with patch.object(completer, "_make_flow", return_value=complete_flow):
+        completer.complete_remote_auth(
+            "authorization-code", "state", "https://service.test/auth/callback"
+        )
+
+    complete_flow.fetch_token.assert_called_once_with(code="authorization-code")
+    assert complete_flow.code_verifier == "start-code-verifier"
+    assert completer.token_path.exists()
+    assert completer._credentials is complete_flow.credentials
+    assert not completer._pending_auth_path.exists()
 
 
 def test_remote_auth_exchanges_code_and_saves_token(tmp_path, monkeypatch):
@@ -151,12 +183,12 @@ def test_remote_auth_exchanges_code_and_saves_token(tmp_path, monkeypatch):
     assert complete_flow.code_verifier == "start-code-verifier"
     assert yt_auth.token_path.exists()
     assert yt_auth._credentials is complete_flow.credentials
-    assert yt_auth._remote_auth_state is None
+    assert not yt_auth._pending_auth_path.exists()
 
 
-def test_remote_auth_rejects_invalid_state(monkeypatch):
+def test_remote_auth_rejects_invalid_state(tmp_path, monkeypatch):
     monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
-    yt_auth = YouTubeAuth()
+    yt_auth = YouTubeAuth(config_dir=tmp_path)
     flow = MagicMock()
     flow.code_verifier = "start-code-verifier"
     flow.authorization_url.return_value = ("https://accounts.google.test/auth", "state")
@@ -169,7 +201,39 @@ def test_remote_auth_rejects_invalid_state(monkeypatch):
             )
 
     flow.fetch_token.assert_not_called()
-    assert yt_auth._remote_auth_state is None
+    assert not yt_auth._pending_auth_path.exists()
+
+
+def test_remote_auth_rejects_expired_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
+    yt_auth = YouTubeAuth(config_dir=tmp_path)
+    flow = MagicMock()
+    flow.code_verifier = "start-code-verifier"
+    flow.authorization_url.return_value = ("https://accounts.google.test/auth", "state")
+
+    with patch.object(yt_auth, "_make_flow", return_value=flow):
+        yt_auth.begin_remote_auth("https://service.test/auth/callback")
+
+    # Simulate the 10-minute window having elapsed.
+    pending = json.loads(yt_auth._pending_auth_path.read_text())
+    pending["expires_at"] = 0
+    yt_auth._pending_auth_path.write_text(json.dumps(pending))
+
+    with pytest.raises(AuthError, match="Invalid or expired OAuth state"):
+        yt_auth.complete_remote_auth(
+            "authorization-code", "state", "https://service.test/auth/callback"
+        )
+    flow.fetch_token.assert_not_called()
+
+
+def test_remote_auth_rejects_missing_pending_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_MCP_REMOTE_AUTH_ENABLED", "true")
+    yt_auth = YouTubeAuth(config_dir=tmp_path)
+
+    with pytest.raises(AuthError, match="Invalid or expired OAuth state"):
+        yt_auth.complete_remote_auth(
+            "authorization-code", "state", "https://service.test/auth/callback"
+        )
 
 
 def test_status_no_token(tmp_path):
