@@ -23,7 +23,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.analytics.readonly",
     "https://www.googleapis.com/auth/youtube.analytics.monetary.readonly",
 ]
-]
 
 DEFAULT_CONFIG_DIR = Path.home() / ".youtube-mcp"
 TOKEN_FILE = "token.json"
@@ -278,4 +277,4 @@ class YouTubeAuth:
                 self.client_secret_json or self.client_secret_path.exists()
             ),
             "client_secret_path": str(self.client_secret_path),
-        }
+            }
